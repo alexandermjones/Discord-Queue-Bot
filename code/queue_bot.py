@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 # Third party imports.
+from discord import Intents
 from discord.ext import commands
 
 # Local imports.
 from game_queue import Player, GameQueue
-
 
 
 class QueueBot(commands.Bot):
@@ -28,14 +28,16 @@ class QueueBot(commands.Bot):
         NO_GAME_PARAM_RESPONSE (str): The default response for there not being a game parameter in a command.
     """
 
-    def __init__(self, command_prefix: str='!'):
+    def __init__(self,
+                 command_prefix: str='!'):
         """
         Initialises the Queue_Bot.
 
         Args:
             command_prefix (str, default='!'): The character which identifies a message as a command.
         """
-        super().__init__(command_prefix=command_prefix, 
+        super().__init__(command_prefix=command_prefix,
+                         intents=Intents.default(),
                          help_command=commands.DefaultHelpCommand(no_category='Commands'))
         self.command_prefix = command_prefix
         self.queues = dict()
@@ -51,6 +53,8 @@ class QueueBot(commands.Bot):
                 json.dump({}, f)
         with open(self.__game_dict_fpath) as f:
             self.game_dict = json.load(f)
+        self.add_commands()
+        self.add_events()
 
 
     """
@@ -120,6 +124,25 @@ class QueueBot(commands.Bot):
     """
     Commands for the bot - methods decorated by discord.ext.commands.
     """
+    def add_commands(self) -> None:
+        """
+        Add all commands to the bot.
+        """
+        self.add_command(self.start_queue)
+        self.add_command(self.leave_queue)
+        self.add_command(self.next_game_for_queue)
+        self.add_command(self.status_queue)
+        self.add_command(self.wait_queue)
+        self.add_command(self.add_player)
+        self.add_command(self.kick_player)
+        self.add_command(self.delay_player)
+        self.add_command(self.rejoin_player)
+        self.add_command(self.undo_queue)
+        self.add_command(self.switch_queue)
+        self.add_command(self.end_queue)
+        return
+
+
     @commands.hybrid_command(name='queue', 
                              aliases=['join'],
                              help='Join a Game Queue for the given game_name, start queue if none exists.')
@@ -446,7 +469,6 @@ class QueueBot(commands.Bot):
         
 
     @commands.hybrid_command(name='end',
-                             aliases=['switch'], 
                              help='End a current queue.')
     async def end_queue(self, ctx: commands.Context, game_name: str=''):
         """
@@ -454,7 +476,7 @@ class QueueBot(commands.Bot):
 
         Args:
             ctx (commands.Context): The context of the command.
-            game_name (str, default=""): The name of the game to add the player to.
+            game_name (str, default=""): The name of the game to end the queue for.
 
         Returns:
             str: The response message to post in the Discord channel the command was sent in.
@@ -471,31 +493,36 @@ class QueueBot(commands.Bot):
     """
     Behaviour for events happening to the bot.
     """
-    @commands.event
-    async def on_command_error(ctx: commands.Context, error: Any) -> str:
+    def add_events(self) -> None:
         """
-        Error handling for errors with a command.
-
-        Args:
-            ctx (commands.Context): The context of the command.
-            error (Any): A commands error.
-
-        Returns:
-            str: The response message to post in the Discord channel the error was received in.
+        Add all events to the bot.
         """
-        if isinstance(error, commands.CommandNotFound):
-            await ctx.send("**Invalid command. Try using** `help` **to figure out commands!**")
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send('**Please pass in all requirements to use the command. Try using** `help`**!**')
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("**You dont have all the requirements or permissions for using this command :angry:**")
-        if isinstance(error, commands.errors.CommandInvokeError):
-            await ctx.send("**There was a connection error somewhere, why don't you try again now?**")
+        @self.event
+        async def on_command_error(ctx: commands.Context, error: Any) -> str:
+            """
+            Error handling for errors with a command.
 
+            Args:
+                ctx (commands.Context): The context of the command.
+                error (Any): A commands error.
 
-    @commands.event
-    async def on_ready(self) -> None:
-        """
-        Message to print in the terminal when the bot is created to confirm its ready.
-        """
-        print(f"Bot created as: {self.user.name}")
+            Returns:
+                str: The response message to post in the Discord channel the error was received in.
+            """
+            if isinstance(error, commands.CommandNotFound):
+                await ctx.send("**Invalid command. Try using** `help` **to figure out commands!**")
+            if isinstance(error, commands.MissingRequiredArgument):
+                await ctx.send('**Please pass in all requirements to use the command. Try using** `help`**!**')
+            if isinstance(error, commands.MissingPermissions):
+                await ctx.send("**You dont have all the requirements or permissions for using this command :angry:**")
+            if isinstance(error, commands.errors.CommandInvokeError):
+                await ctx.send("**There was a connection error somewhere, why don't you try again now?**")
+
+        @self.event
+        async def on_ready(self) -> None:
+            """
+            Message to print in the terminal when the bot is created to confirm its ready.
+            """
+            print(f"Bot created as: {self.user.name}")
+        
+        return

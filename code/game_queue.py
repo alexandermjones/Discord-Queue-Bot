@@ -143,8 +143,8 @@ class GameQueue():
         elif player in self.waiting_players:
             self.waiting_players.remove(player)
         else:
-            return f"{player} is not a member of the queue."
-        message = f"{player} has been removed from the queue.\n"
+            return f"{player.name} is not a member of the queue."
+        message = f"{player.name} has been removed from the queue.\n"
         message += self.print_players()
         return message
 

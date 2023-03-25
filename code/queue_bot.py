@@ -14,6 +14,9 @@ from discord.ext import commands
 # Local imports.
 from game_queue import Player, GameQueue
 
+# Add the message_content intent to use commands
+INTENTS = discord.Intents.default()
+INTENTS.message_content = True
 
 class QueueBot(commands.Bot):
     """
@@ -37,7 +40,7 @@ class QueueBot(commands.Bot):
             command_prefix (str, default='!'): The character which identifies a message as a command.
         """
         super().__init__(command_prefix=command_prefix,
-                         intents=discord.Intents.default(),
+                         intents=INTENTS,
                          help_command=commands.DefaultHelpCommand(no_category='Commands'))
         self.queues = dict()
         self.NO_GAME_PARAM_RESPONSE = "Game to interact with cannot be identified. Please enter it after the command."
@@ -67,18 +70,18 @@ class QueueBot(commands.Bot):
             player_cutoff (int): The new player_cutoff to update with.
         """
         self.game_dict[game_name] = player_cutoff
-        with open(self.game_dict_fpath, 'w') as f:
+        with open(self.__game_dict_fpath, 'w') as f:
             json.dump(self.game_dict, f)
         return
 
     
-    def __check_and_lower_game_name_param(self, game_name: str='', player_name: str='') -> str:
+    def __check_and_lower_game_name_param(self, game_name, player_name: str='') -> str:
         """
         Infers the game_name parameter if not given and then returns it lowered.
 
         Args:
             game_name (str): The name of the game to lower.
-            player_name (str): The name of the player to infer a game_name from.
+            player_name (str, default=''): The name of the player to infer a game_name from.
 
         Returns:
             str: The lowered name of the game, if inferrable.
@@ -105,17 +108,33 @@ class QueueBot(commands.Bot):
         Returns:
             int: The player_cutoff for the given game_name.
         """
-        try:
-            assert game_name in self.queues.keys()
-        except AssertionError:
-            raise ValueError(f"Game named: \'{game_name}\' is not in the queue.")
         if game_name in self.game_dict:
             db_player_cutoff = self.game_dict[game_name]
             if not player_cutoff:
                 player_cutoff = db_player_cutoff
             if player_cutoff != db_player_cutoff:
                 self.__update_player_cutoff(game_name, player_cutoff)
+        else:
+            self.__update_player_cutoff(game_name, player_cutoff)
         return player_cutoff
+    
+
+    def __check_if_queue_exists_and_nonempty(self, game_name: str) -> False:
+        """
+        Check whether a queue with game_name exists and has players.
+
+        Args:
+            game_name (str): The name of the game to check whether it exists and has players for.
+        
+        Returns:
+            bool: True if queue exists with players, else False.
+        """
+        if not game_name in self.queues.keys():
+            return False
+        elif not self.queues[game_name].players:
+            return False
+        else:
+            return True
 
 
     """
@@ -133,12 +152,12 @@ class QueueBot(commands.Bot):
         Returns:
             str: The response message to post in the Discord channel the command was sent in.
         """
-        lower_game_name = self.__check_and_lower_game_name_param(self, game_name)
+        lower_game_name = self.__check_and_lower_game_name_param(game_name=game_name)
         # If no game_name and can't be inferred, then return this needs to be a parameter
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
         # Add player to queue if game already has a queue
-        elif lower_game_name in self.queues.keys():
+        elif self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.queues[lower_game_name].add_player(Player(ctx.message.author.name))
         # Create a new queue if game does not have a queue
         else:
@@ -148,12 +167,14 @@ class QueueBot(commands.Bot):
                 response = self.NO_PLAYERCUTOFF_PARAM_RESPONSE
             # Create a new queue for the game, and @mention game if possible.
             else:
-                self.queues[game_name] = GameQueue(game_name, player_cutoff)
+                self.queues[lower_game_name] = GameQueue(lower_game_name, player_cutoff)
                 roles = ctx.guild.roles
+                mentioned_game_name = lower_game_name
                 for role in roles:
-                    if lower_game_name in role.name.lower and role.mentionable:
-                        game_name = role.mention
-                response = f"Queue has been created for {game_name}.\n"
+                    if lower_game_name in role.name.lower() and role.mentionable:
+                        mentioned_game_name = role.mention
+                        break
+                response = f"Queue has been created for {mentioned_game_name}.\n"
                 response += self.queues[lower_game_name].add_player(Player(ctx.message.author.name))
         await ctx.send(response)
 
@@ -170,16 +191,16 @@ class QueueBot(commands.Bot):
             str: The response message to post in the Discord channel the command was sent in.
         """
         player_name = ctx.message.author.name
-        lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name)
+        lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=player_name)
         # If no game_name and can't be inferred, then return this needs to be a parameter
-        if not game_name:
+        if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
         # If player in the game_name, them remove from queue
-        elif self.queues[game_name].find_player[player_name]:
-            player = self.queues[game_name].find_player[player_name]
-            response = self.queues[game_name].delete_player(player)
+        elif self.queues[lower_game_name].find_player(player_name):
+            player = self.queues[lower_game_name].find_player(player_name)
+            response = self.queues[lower_game_name].delete_player(player)
         else:
-            response = f"{player_name} is not a member of the queue for {game_name}. Please check and try again."
+            response = f"{player_name} is not a member of the queue for {lower_game_name}. Please check and try again."
         await ctx.send(response)
 
 
@@ -195,10 +216,12 @@ class QueueBot(commands.Bot):
             str: The response message to post in the Discord channel the command was sent in.
         """
         player_name = ctx.message.author.name
-        lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name)
+        lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=player_name)
         # If no game_name and can't be inferred, then return this needs to be a parameter
-        if not game_name:
+        if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
+            response = self.NO_QUEUE_RESPONSE
         # Else rotate the queue once and print the new ordering of the queue
         else:
             response = self.queues[lower_game_name].update_queue()
@@ -219,9 +242,9 @@ class QueueBot(commands.Bot):
         player_name = ctx.message.author.name
         lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=player_name)
         # If no game_name and can't be inferred, then return this needs to be a parameter
-        if not game_name:
+        if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
-        elif lower_game_name not in self.queues.keys():
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.NO_QUEUE_RESPONSE
         else:
             response = self.queues[lower_game_name].print_players()
@@ -243,7 +266,7 @@ class QueueBot(commands.Bot):
         lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=player_name)
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
-        elif lower_game_name not in self.queues.keys():
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.NO_QUEUE_RESPONSE
         else:
             player = self.queues[lower_game_name].find_player(player_name)
@@ -268,7 +291,7 @@ class QueueBot(commands.Bot):
         lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=ctx.message.author.name)
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
-        elif lower_game_name not in self.queues.keys():
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.NO_QUEUE_RESPONSE
         elif self.queues[lower_game_name].find_player(player_to_add):
             response = f'{player_to_add} is already a member of the queue for {lower_game_name}.'
@@ -294,7 +317,7 @@ class QueueBot(commands.Bot):
         lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=ctx.message.author.name)
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
-        elif lower_game_name not in self.queues.keys():
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.NO_QUEUE_RESPONSE
         else:
             player = self.queues[lower_game_name].find_player(player_to_remove)
@@ -320,7 +343,7 @@ class QueueBot(commands.Bot):
         lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=player_to_delay)
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
-        elif lower_game_name not in self.queues.keys():
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.NO_QUEUE_RESPONSE
         else:
             player = self.queues[lower_game_name].find_player(player_to_delay)
@@ -344,12 +367,11 @@ class QueueBot(commands.Bot):
         Returns:
             str: The response message to post in the Discord channel the command was sent in.
         """
-        lower_game_name = self.__check_and_lower_game_name_param('', player_name=ctx.message.author.name)
+        lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=ctx.message.author.name)
         game_name = game_name.lower()
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
-        elif lower_game_name not in self.queues.keys():
-            response = self.NO_GAME_PARAM_RESPONSE
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.NO_QUEUE_RESPONSE
         else:
             player = self.queues[lower_game_name].find_player(ctx.message.author.name)
@@ -370,7 +392,7 @@ class QueueBot(commands.Bot):
 
         Args:
             ctx (commands.Context): The context of the command.
-            game_name (str, default=""): The name of the game to add the player to.
+            game_name (str, default=""): The name of the game to undo the queue state for.
 
         Returns:
             str: The response message to post in the Discord channel the command was sent in.
@@ -378,7 +400,7 @@ class QueueBot(commands.Bot):
         lower_game_name = self.__check_and_lower_game_name_param(game_name, player_name=ctx.message.author.name)
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
-        elif lower_game_name not in self.queues.keys():
+        elif not self.__check_if_queue_exists_and_nonempty(lower_game_name):
             response = self.NO_QUEUE_RESPONSE
         else:
             message = self.queues[lower_game_name].undo_command()
@@ -415,13 +437,13 @@ class QueueBot(commands.Bot):
                 players_to_move = self.queues[current_game_name].players.copy()
                 self.queues[current_game_name].empty_queue()
                 self.queues[lower_game_name] = GameQueue(lower_game_name, player_cutoff, players=players_to_move)
+                mentioned_game_name = lower_game_name
                 roles = ctx.guild.roles
                 for role in roles:
-                    if lower_game_name in role.name.lower and role.mentionable:
-                        game_name = role.mention
-                response = f"Queue has been created for {game_name}.\n"
-                response += self.queues[lower_game_name].add_player(Player(ctx.message.author.name))
-        await ctx.send(response)    
+                    if lower_game_name in role.name.lower() and role.mentionable:
+                        mentioned_game_name = role.mention
+                response = f"Queue has been created for {mentioned_game_name}.\n"
+        await ctx.send(response)
         
 
     async def end_queue(self, ctx: commands.Context, game_name: str=''):
@@ -439,7 +461,7 @@ class QueueBot(commands.Bot):
         if not lower_game_name:
             response = self.NO_GAME_PARAM_RESPONSE
         else:
-            self.queues[game_name].empty_queue()
+            self.queues[lower_game_name].empty_queue()
             response = "The queue has been ended. Type \'!queue [game_name]\' to start a new queue."
         await ctx.send(response)
 
@@ -461,7 +483,7 @@ class QueueBot(commands.Bot):
     """
     Behaviour for events happening to the bot.
     """
-    async def on_command_error(ctx: commands.Context, error: Any) -> str:
+    async def on_command_error(self, ctx: commands.Context, error: Any) -> str:
         """
         Error handling for errors with a command.
 
@@ -474,12 +496,14 @@ class QueueBot(commands.Bot):
         """
         if isinstance(error, commands.CommandNotFound):
             await ctx.send("**Invalid command. Try using** `help` **to figure out commands!**")
-        if isinstance(error, commands.MissingRequiredArgument):
+        elif isinstance(error, commands.MissingRequiredArgument):
             await ctx.send('**Please pass in all requirements to use the command. Try using** `help`**!**')
-        if isinstance(error, commands.MissingPermissions):
+        elif isinstance(error, commands.MissingPermissions):
             await ctx.send("**You dont have all the requirements or permissions for using this command :angry:**")
-        if isinstance(error, commands.errors.CommandInvokeError):
+        elif isinstance(error, commands.errors.CommandInvokeError):
             await ctx.send("**There was a connection error somewhere, why don't you try again now?**")
+        else:
+            print(error)
 
 
     async def on_ready(self) -> None:
@@ -509,69 +533,74 @@ def add_commands_to_bot(bot: QueueBot):
     '''
     @bot.hybrid_command(name='queue', 
                         aliases=['join'],
-                        help='Join a Game Queue for the given game_name, start queue if none exists.')
+                        brief='Join a Game Queue for the given game_name, start queue if none exists.')
     async def start_queue(ctx, game_name: str='', player_cutoff: int=0):
         await bot.start_queue(ctx, game_name=game_name, player_cutoff=player_cutoff)
 
     @bot.hybrid_command(name='leave',
                         aliases=['quit'],
-                        help='Leave the queue for the given game_name.')
+                        brief='Leave the queue for the given game_name.')
     async def leave_queue(ctx, game_name: str=''):
         await bot.leave_queue(ctx, game_name=game_name)
     
     @bot.hybrid_command(name='next',
                         aliases=['rotate', 'update'],
-                        help='Rotate the queue to get the players for the next game.')
+                        brief='Rotate the queue to get the players for the next game.')
     async def next_game_for_queue(ctx, game_name: str=""):
         await bot.next_game_for_queue(ctx, game_name=game_name)
 
     @bot.hybrid_command(name='status', 
-                        help='See the status of the queue for the given game_name.')
+                        brief='See the status of the queue for the given game_name.')
     async def status_queue(ctx, game_name: str=""):
         await bot.status_queue(ctx, game_name=game_name)
 
     @bot.hybrid_command(name='wait', 
                         aliases=['time'],
-                        help='See how long until your next game.')
+                        brief='See how long until your next game.')
     async def wait_queue(ctx, game_name: str=''):
         await bot.wait_queue(ctx, game_name=game_name)
 
     @bot.hybrid_command(name='add', 
-                        help='Add a player to the queue.')
+                        brief='Add a player to the queue.')
     async def add_player(ctx, player_to_add: str='', game_name: str=''):
         await bot.add_player(ctx, player_to_add=player_to_add, game_name=game_name)
 
     @bot.hybrid_command(name='kick', 
                         aliases=['remove'],
-                        help='Remove a player from the queue.')
+                        brief='Remove a player from the queue.')
     async def kick_player(ctx, player_to_remove: str='', game_name: str=''):
         await bot.kick_player(ctx, player_to_remove=player_to_remove, game_name=game_name)
 
     @bot.hybrid_command(name='delay', 
-                        help='Temporarily no longer join current players until rejoined.')
-    async def delay_player(ctx, game_name: str='', player_to_delay: str=''):
-        await bot.delay_player(game_name=game_name, player_to_delay=player_to_delay)
+                        brief='Temporarily no longer join current players until rejoined.')
+    async def delay_player(ctx, player_to_delay: str='', game_name: str=''):
+        await bot.delay_player(ctx, game_name=game_name, player_to_delay=player_to_delay)
 
     @bot.hybrid_command(name='rejoin', 
-                        help='Stop delaying games and be able to join current players again.')
+                        brief='Stop delaying games and be able to join current players again.')
     async def rejoin_player(ctx, game_name: str=''):
-        await bot.rejoin_player(game_name=game_name)
+        await bot.rejoin_player(ctx, game_name=game_name)
 
     @bot.hybrid_command(name='undo', 
-                        help='Reset the queue to the previous state.')
+                        brief='Reset the queue to the previous state.')
     async def undo_queue(ctx, game_name: str=''):
-        await bot.undo_queue(game_name=game_name)
+        await bot.undo_queue(ctx, game_name=game_name)
 
     @bot.hybrid_command(name='game',
                         aliases=['switch'],
-                        help='Switch the queue to a different game.')
+                        brief='Switch the queue to a different game.')
     async def switch_queue(ctx, game_name: str='', player_cutoff: int=0):
-        await bot.switch_queue(game_name=game_name, player_cutoff=player_cutoff)
+        await bot.switch_queue(ctx, game_name=game_name, player_cutoff=player_cutoff)
 
     @bot.hybrid_command(name='end',
-                        aliases=['switch'], 
-                        help='End a current queue.')
+                        aliases=['stop'], 
+                        brief='End a current queue.')
     async def end_queue(ctx, game_name: str=''):
-        await bot.end_queue(game_name=game_name)
+        await bot.end_queue(ctx, game_name=game_name)
+
+    @bot.command(name='sync_commands_queuebot',
+                 hidden=True)
+    async def sync_command_tree(ctx):
+        await bot.sync_command_tree(ctx)
     
     print('Commands added to bot.')
